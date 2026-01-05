@@ -3,61 +3,64 @@ name: Terraform Deploy
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch:
+    branches: [ "main" ]           # executa apply em push na main
+  workflow_dispatch:               # execução manual (inclui destroy)
+    inputs:
+      action:
+        description: "Escolha a ação a executar"
+        required: true
+        default: "apply"
+        type: choice
+        options:
+          - apply
+          - destroy
+      confirm_destroy:
+        description: "Digite 'CONFIRM' para habilitar o destroy"
+        required: false
+        default: ""
+        type: string
 
 env:
-  TF_WORKING_DIR: ./
+  TF_WORKING_DIR: ./               # ajuste se seus .tf estiverem em subpasta
 
 jobs:
-  terraform:
+  plan_and_apply:
+    name: Plan & Apply
     runs-on: ubuntu-latest
+    # roda em push para main OU workflow_dispatch quando action=apply
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.action == 'apply')
 
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
-
-      - name: Listar conteúdo do repositório (debug)
-        run: |
-          echo "Diretório atual: $(pwd)"
-          ls -la
-          echo "Subpastas (nível 1):"
-          find . -maxdepth 2 -type d -print
 
       - name: Login no Azure (Service Principal)
         uses: azure/login@v2
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-      # Parse robusto do segredo AZURE_CREDENTIALS
       - name: Exportar variáveis ARM (Client Secret)
         shell: bash
         run: |
-          # Salva o JSON do segredo em um arquivo
           printf '%s' '${{ secrets.AZURE_CREDENTIALS }}' > sp.json
+          SUBSCRIPTION_ID=$(jq -r '.subscriptionId // empty' sp.json)
+          TENANT_ID=$(jq -r '.tenantId // empty' sp.json)
+          CLIENT_ID=$(jq -r '.clientId // empty' sp.json)
+          CLIENT_SECRET=$(jq -r '.clientSecret // empty' sp.json)
 
-          # Mostra estrutura (mascarada pelo GitHub para segredos) só para debug
-          echo "Conteúdo sp.json salvo (tamanho): $(wc -c < sp.json) bytes"
+          [ -n "$SUBSCRIPTION_ID" ] || { echo "::error ::AZURE_CREDENTIALS: 'subscriptionId' ausente."; exit 1; }
+          [ -n "$TENANT_ID" ] || { echo "::error ::AZURE_CREDENTIALS: 'tenantId' ausente."; exit 1; }
+          [ -n "$CLIENT_ID" ] || { echo "::error ::AZURE_CREDENTIALS: 'clientId' ausente."; exit 1; }
+          [ -n "$CLIENT_SECRET" ] || { echo "::error ::AZURE_CREDENTIALS: 'clientSecret' ausente."; exit 1; }
 
-          # Extrai campos com jq
-          SUBSCRIPTION_ID=$(jq -r '.subscriptionId' sp.json)
-          TENANT_ID=$(jq -r '.tenantId' sp.json)
-          CLIENT_ID=$(jq -r '.clientId' sp.json)
-          CLIENT_SECRET=$(jq -r '.clientSecret' sp.json)
+          {
+            echo "ARM_SUBSCRIPTION_ID=$SUBSCRIPTION_ID"
+            echo "ARM_TENANT_ID=$TENANT_ID"
+            echo "ARM_CLIENT_ID=$CLIENT_ID"
+            echo "ARM_CLIENT_SECRET=$CLIENT_SECRET"
+          } >> $GITHUB_ENV
 
-          # Valida extração básica (sem imprimir valores sensíveis)
-          [ -n "$SUBSCRIPTION_ID" ] || { echo "ERRO: subscriptionId vazio."; exit 1; }
-          [ -n "$TENANT_ID" ] || { echo "ERRO: tenantId vazio."; exit 1; }
-          [ -n "$CLIENT_ID" ] || { echo "ERRO: clientId vazio."; exit 1; }
-          [ -n "$CLIENT_SECRET" ] || { echo "ERRO: clientSecret vazio."; exit 1; }
-
-          # Exporta para o ambiente do job
-          echo "ARM_SUBSCRIPTION_ID=$SUBSCRIPTION_ID" >> $GITHUB_ENV
-          echo "ARM_TENANT_ID=$TENANT_ID" >> $GITHUB_ENV
-          echo "ARM_CLIENT_ID=$CLIENT_ID" >> $GITHUB_ENV
-          echo "ARM_CLIENT_SECRET=$CLIENT_SECRET" >> $GITHUB_ENV
-
-      # Se seu backend usa Access Key (e não RBAC), descomente:
+      # Se o backend usa Access Key (em vez de RBAC), descomente:
       # - name: Exportar ARM_ACCESS_KEY (para backend)
       #   run: echo "ARM_ACCESS_KEY=${{ secrets.ARM_ACCESS_KEY }}" >> $GITHUB_ENV
 
@@ -85,3 +88,56 @@ jobs:
       - name: Aplicar infraestrutura
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform apply -input=false -auto-approve tfplan
+
+  destroy:
+    name: Destroy (manual)
+    runs-on: ubuntu-latest
+    # só roda em workflow_dispatch quando o usuário escolhe destroy e confirma
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'destroy' && inputs.confirm_destroy == 'CONFIRM'
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Login no Azure (Service Principal)
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Exportar variáveis ARM (Client Secret)
+        shell: bash
+        run: |
+          printf '%s' '${{ secrets.AZURE_CREDENTIALS }}' > sp.json
+          SUBSCRIPTION_ID=$(jq -r '.subscriptionId // empty' sp.json)
+          TENANT_ID=$(jq -r '.tenantId // empty' sp.json)
+          CLIENT_ID=$(jq -r '.clientId // empty' sp.json)
+          CLIENT_SECRET=$(jq -r '.clientSecret // empty' sp.json)
+
+          [ -n "$SUBSCRIPTION_ID" ] || { echo "::error ::AZURE_CREDENTIALS: 'subscriptionId' ausente."; exit 1; }
+          [ -n "$TENANT_ID" ] || { echo "::error ::AZURE_CREDENTIALS: 'tenantId' ausente."; exit 1; }
+          [ -n "$CLIENT_ID" ] || { echo "::error ::AZURE_CREDENTIALS: 'clientId' ausente."; exit 1; }
+          [ -n "$CLIENT_SECRET" ] || { echo "::error ::AZURE_CREDENTIALS: 'clientSecret' ausente."; exit 1; }
+
+          {
+            echo "ARM_SUBSCRIPTION_ID=$SUBSCRIPTION_ID"
+            echo "ARM_TENANT_ID=$TENANT_ID"
+            echo "ARM_CLIENT_ID=$CLIENT_ID"
+            echo "ARM_CLIENT_SECRET=$CLIENT_SECRET"
+          } >> $GITHUB_ENV
+
+      # Se o backend usa Access Key (em vez de RBAC), descomente:
+      # - name: Exportar ARM_ACCESS_KEY (para backend)
+      #   run: echo "ARM_ACCESS_KEY=${{ secrets.ARM_ACCESS_KEY }}" >> $GITHUB_ENV
+
+      - name: Instalar Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.4.0
+
+      - name: Inicializar Terraform (para ler o state remoto)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
+
+      - name: Destroy (auto-approve)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform destroy -input=false -auto-approve
