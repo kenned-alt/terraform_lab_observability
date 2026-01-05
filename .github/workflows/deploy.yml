@@ -3,16 +3,22 @@ name: Deploy Infra Azure
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   terraform:
     runs-on: ubuntu-latest
+
+    # Diretório dentro do repo onde estão seus arquivos .tf
+    env:
+      TF_WORKING_DIR: Eliminatórias01/Observability
+
     steps:
       - name: Checkout código
         uses: actions/checkout@v3
 
+      # O login é útil para az CLI; o Terraform vai usar as ARM_* abaixo
       - name: Login no Azure
         uses: azure/login@v1
         with:
@@ -24,12 +30,39 @@ jobs:
           terraform_version: 1.6.6
 
       - name: Inicializar Terraform
-        run: terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}
+          ARM_CLIENT_SECRET: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}
+          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
+          ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}
+          # Se usa backend azurerm com access_key, descomente a linha abaixo:
+          # ARM_ACCESS_KEY: ${{ secrets.ARM_ACCESS_KEY }}
+        run: terraform init -input=false
 
       - name: Validar Terraform
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}
+          ARM_CLIENT_SECRET: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}
+          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
+          ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}
         run: terraform validate
 
-      - name: Aplicar Terraform
-        run: terraform apply -auto-approve
+      - name: Plano Terraform
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}
+          ARM_CLIENT_SECRET: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}
+          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
+          ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}
+        run: terraform plan -input=false -out=tfplan
 
-        
+      - name: Aplicar Terraform
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        env:
+          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientId }}
+          ARM_CLIENT_SECRET: ${{ fromJson(secrets.AZURE_CREDENTIALS).clientSecret }}
+          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenantId }}
+          ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscriptionId }}
+        run: terraform apply -input=false -auto-approve tfplan
