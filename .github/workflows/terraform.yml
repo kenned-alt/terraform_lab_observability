@@ -1,0 +1,87 @@
+
+name: Terraform Deploy
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  TF_WORKING_DIR: ./
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Listar conteúdo do repositório (debug)
+        run: |
+          echo "Diretório atual: $(pwd)"
+          ls -la
+          echo "Subpastas (nível 1):"
+          find . -maxdepth 2 -type d -print
+
+      - name: Login no Azure (Service Principal)
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # Parse robusto do segredo AZURE_CREDENTIALS
+      - name: Exportar variáveis ARM (Client Secret)
+        shell: bash
+        run: |
+          # Salva o JSON do segredo em um arquivo
+          printf '%s' '${{ secrets.AZURE_CREDENTIALS }}' > sp.json
+
+          # Mostra estrutura (mascarada pelo GitHub para segredos) só para debug
+          echo "Conteúdo sp.json salvo (tamanho): $(wc -c < sp.json) bytes"
+
+          # Extrai campos com jq
+          SUBSCRIPTION_ID=$(jq -r '.subscriptionId' sp.json)
+          TENANT_ID=$(jq -r '.tenantId' sp.json)
+          CLIENT_ID=$(jq -r '.clientId' sp.json)
+          CLIENT_SECRET=$(jq -r '.clientSecret' sp.json)
+
+          # Valida extração básica (sem imprimir valores sensíveis)
+          [ -n "$SUBSCRIPTION_ID" ] || { echo "ERRO: subscriptionId vazio."; exit 1; }
+          [ -n "$TENANT_ID" ] || { echo "ERRO: tenantId vazio."; exit 1; }
+          [ -n "$CLIENT_ID" ] || { echo "ERRO: clientId vazio."; exit 1; }
+          [ -n "$CLIENT_SECRET" ] || { echo "ERRO: clientSecret vazio."; exit 1; }
+
+          # Exporta para o ambiente do job
+          echo "ARM_SUBSCRIPTION_ID=$SUBSCRIPTION_ID" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=$TENANT_ID" >> $GITHUB_ENV
+          echo "ARM_CLIENT_ID=$CLIENT_ID" >> $GITHUB_ENV
+          echo "ARM_CLIENT_SECRET=$CLIENT_SECRET" >> $GITHUB_ENV
+
+      # Se seu backend usa Access Key (e não RBAC), descomente:
+      # - name: Exportar ARM_ACCESS_KEY (para backend)
+      #   run: echo "ARM_ACCESS_KEY=${{ secrets.ARM_ACCESS_KEY }}" >> $GITHUB_ENV
+
+      - name: Instalar Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.4.0
+
+      - name: Inicializar Terraform
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init -input=false
+
+      - name: Validar código
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
+
+      - name: Plano de mudanças
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform plan -input=false -out=tfplan
+
+      - name: Mostrar plano no log
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform show -no-color tfplan
+
+      - name: Aplicar infraestrutura
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform apply -input=false -auto-approve tfplan
