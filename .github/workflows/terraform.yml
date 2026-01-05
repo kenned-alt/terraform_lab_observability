@@ -3,7 +3,7 @@ name: Terraform Deploy
 
 on:
   push:
-    branches: [ "main" ]           # executa apply em push na main
+    branches: [ "main" ]           
   workflow_dispatch:               # execução manual (inclui destroy)
     inputs:
       action:
